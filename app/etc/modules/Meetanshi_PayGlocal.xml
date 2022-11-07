@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<config>
+	<modules>
+		<Meetanshi_PayGlocal>
+			<active>true</active>
+			<codePool>local</codePool>
+		</Meetanshi_PayGlocal>
+	</modules>
+</config>
