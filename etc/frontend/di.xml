@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <virtualType name="Meetanshi\PayGlocal\Model\ConfigProvider" type="Magento\Payment\Model\CcGenericConfigProvider">
+        <arguments>
+            <argument name="methodCodes" xsi:type="array">
+                <item name="payglocalform" xsi:type="const">Meetanshi\PayGlocal\Model\Payment::CODE</item>
+            </argument>
+        </arguments>
+    </virtualType>
+    <type name="Magento\Checkout\Model\CompositeConfigProvider">
+        <arguments>
+            <argument name="configProviders" xsi:type="array">
+                <item name="payglocal_config_provider" xsi:type="object">Meetanshi\PayGlocal\Model\PayGlocalConfigProvider</item>
+            </argument>
+        </arguments>
+    </type>
+    <virtualType name="MeetanshiPayGlocalIframeCcConfigProvider" type="Magento\Payment\Model\IframeConfigProvider">
+        <arguments>
+            <argument name="methodCode" xsi:type="const">Meetanshi\PayGlocal\Model\Payment::CODE</argument>
+        </arguments>
+    </virtualType>
+</config>
