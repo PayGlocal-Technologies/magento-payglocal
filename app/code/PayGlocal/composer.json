@@ -1,0 +1,29 @@
+{
+    "name": "meetanshi/magento-2-payglocal-hosted-payment",
+    "description": "Magento 2 PayGlocal",
+    "require": {
+        "php": "~5.5.0|~5.6.0|~7.0.0|7.0.2|7.0.4|~7.0.6|~7.1.0|~7.2.0|~7.3.0|~7.4.0",
+        "web-token/jwt-framework": "*"
+    },
+    "type": "magento2-module",
+    "version": "1.0.0",
+    "license": [
+        "OSL-3.0",
+        "AFL-3.0"
+    ],
+    "authors": [
+        {
+            "name": "Meetanshi",
+            "email": "help@meetanshi.com",
+            "homepage": "https://meetanshi.com"
+        }
+    ],
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Meetanshi\\PayGlocal\\": ""
+        }
+    }
+}
