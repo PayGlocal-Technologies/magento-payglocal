@@ -1,22 +1,5 @@
 <?php
 
-require_once(Mage::getBaseDir('lib') . '/payglocal/vendor/autoload.php');
-
-use Jose\Component\Encryption\Algorithm\ContentEncryption\A128CBCHS256;
-use Jose\Component\Encryption\Algorithm\KeyEncryption\RSAOAEP256;
-use Jose\Component\Core\AlgorithmManager;
-use Jose\Component\Encryption\Compression\CompressionMethodManager;
-use Jose\Component\Encryption\Compression\Deflate;
-use Jose\Component\Encryption\JWEBuilder;
-use Jose\Component\Encryption\Serializer\CompactSerializer;
-use Jose\Component\KeyManagement\JWKFactory;
-use Jose\Component\Signature\JWSBuilder;
-use Jose\Component\Signature\Algorithm\RS256;
-use Jose\Component\Signature\Serializer\CompactSerializer as SignCompactSerializer;
-use Jose\Component\Signature\Serializer\JWSSerializerManager;
-use Jose\Component\Signature\JWSVerifier;
-use Jose\Component\Signature\JWSLoader;
-
 class Meetanshi_PayGlocal_PaymentController extends Mage_Core_Controller_Front_Action
 {
     public function redirectAction()
@@ -32,128 +15,101 @@ class Meetanshi_PayGlocal_PaymentController extends Mage_Core_Controller_Front_A
             $order->setIsNotified(false);
             $order->save();
 
-            $keyEncryptionAlgorithmManager = new AlgorithmManager([
-                new RSAOAEP256(),
-            ]);
-            $contentEncryptionAlgorithmManager = new AlgorithmManager([
-                new A128CBCHS256(),
-            ]);
-            $compressionMethodManager = new CompressionMethodManager([
-                new Deflate(),
-            ]);
-
-            $jweBuilder = new JWEBuilder(
-                $keyEncryptionAlgorithmManager,
-                $contentEncryptionAlgorithmManager,
-                $compressionMethodManager
-            );
-
             $helper = Mage::helper('payglocal');
-
-            $publicKeyPath = Mage::getBaseDir('media') . '/payglocal/' . $helper->getPublicPem();
-            $privateKeyPath = Mage::getBaseDir('media') . '/payglocal/' . $helper->getPrivatePem();
-            $publicKID = $helper->getPublicKey();
-            $privateKID = $helper->getPrivateKey();
-            $merchantID = $helper->getMerchantId();
-
-            $jweKey = JWKFactory::createFromKeyFile(
-                $publicKeyPath,
-                null,
-                [
-                    'kid' => $publicKID,
-                    'use' => 'enc',
-                    'alg' => 'RSA-OAEP-256',
-                ]
-            );
-
-            $header = [
-                'issued-by' => $merchantID,
-                'enc' => 'A128CBC-HS256',
-                'exp' => 30000,
-                'iat' => (string)round(microtime(true) * 1000),
-                'alg' => 'RSA-OAEP-256',
-                'kid' => $publicKID
-            ];
-
+            $fp = fopen(Mage::getBaseDir('media') . '/payglocal/' . $helper->getPrivatePem(), "r");
+            $priv_key = fread($fp, 8192);
+            fclose($fp);
+            $privateKey = openssl_get_privatekey($priv_key);
             $merchantUniqueId = $helper->generateRandomString(16);
+
+            $orderItemData = [];
+            foreach ($order->getAllVisibleItems() as $orderItem) {
+                $orderItemData[] = [
+                    "productDescription" => $orderItem->getName(),
+                    "productSKU" => $orderItem->getSku(),
+                    "productType" => $orderItem->getProductType(),
+                    "itemUnitPrice" => round($orderItem->getPrice(), 2),
+                    "itemQuantity" => round($orderItem->getQtyOrdered()),
+                ];
+            }
+            if ($order->getIsVirtual()) {
+                $shippingAddress = $order->getBillingAddress();
+                if (sizeof($shippingAddress->getStreet()) >= 2) {
+                    $addressShipStreetTwo = $shippingAddress->getStreet()[1];
+                } else {
+                    $addressShipStreetTwo = "";
+                }
+            } else {
+                $shippingAddress = $order->getShippingAddress();
+                if (sizeof($shippingAddress->getStreet()) >= 2) {
+                    $addressShipStreetTwo = $shippingAddress->getStreet()[1];
+                } else {
+                    $addressShipStreetTwo = "";
+                }
+            }
+            if (sizeof($order->getBillingAddress()->getStreet()) >= 2) {
+                $addressStreetTwo = $order->getBillingAddress()->getStreet()[1];
+            } else {
+                $addressStreetTwo = "";
+            }
             $payload = json_encode([
                 "merchantTxnId" => $order->getIncrementId(),
                 "merchantUniqueId" => $order->getIncrementId() . '_' . $merchantUniqueId,
-                "paymentData" => array(
+                "paymentData" => [
                     "totalAmount" => round($order->getGrandTotal(), 2),
-                    "txnCurrency" => $order->getOrderCurrencyCode()
-                ),
+                    "txnCurrency" => $order->getOrderCurrencyCode(),
+                    "billingData" => [
+                        "firstName" => $order->getBillingAddress()->getFirstname(),
+                        "lastName" => $order->getBillingAddress()->getLastname(),
+                        "addressStreet1" => $order->getBillingAddress()->getStreet()[0],
+                        "addressStreet2" => $addressStreetTwo,
+                        "addressCity" => $order->getBillingAddress()->getCity(),
+                        "addressState" => $order->getBillingAddress()->getRegion(),
+                        "addressPostalCode" => $order->getBillingAddress()->getPostcode(),
+                        "addressCountry" => $order->getBillingAddress()->getCountryId(),
+                        "emailId" => $order->getCustomerEmail(),
+                        "phoneNumber" => $order->getBillingAddress()->getTelephone(),
+                    ]
+                ],
+                "riskData" => [
+                    "orderData" => $orderItemData,
+                    "customerData" => [
+                        "merchantAssignedCustomerId" => str_pad($order->getCustomerId(), 8, "0", STR_PAD_LEFT),
+                        "customerAccountType" => "1",
+                        "ipAddress" => $order->getRemoteIp(),
+                        "httpAccept" => $_SERVER['HTTP_ACCEPT'],
+                        "httpUserAgent" => $_SERVER['HTTP_USER_AGENT'],
+                    ],
+                    "shippingData" => [
+                        "firstName" => $shippingAddress->getFirstname(),
+                        "lastName" => $shippingAddress->getLastname(),
+                        "addressStreet1" => $shippingAddress->getStreet()[0],
+                        "addressStreet2" => $addressShipStreetTwo,
+                        "addressCity" => $shippingAddress->getCity(),
+                        "addressState" => $shippingAddress->getRegion(),
+                        "addressPostalCode" => $shippingAddress->getPostcode(),
+                        "addressCountry" => $shippingAddress->getCountryId(),
+                        "emailId" => $order->getCustomerEmail(),
+                        "phoneNumber" => $shippingAddress->getTelephone(),
+                    ]
+                ],
+                "clientPlatformDetails" => [
+                    "platformName" => "Magento",
+                    "platformVersion" => Mage::getVersion()
+                ],
                 "merchantCallbackURL" => $helper->getAcceptUrl()
             ]);
 
-            try {
-                $jwe = $jweBuilder
-                    ->create()
-                    ->withPayload($payload)
-                    ->withSharedProtectedHeader($header)
-                    ->addRecipient($jweKey)
-                    ->build();
-            } catch (\Exception $e) {
-                throw new Exception($e->getMessage());
-            }
+            openssl_sign($payload, $signature, $privateKey, OPENSSL_ALGO_SHA256);
+            $sign = base64_encode($signature);
 
-
-            $serializer = new CompactSerializer();
-            $jweToken = $serializer->serialize($jwe, 0);
-
-            $algorithmManager = new AlgorithmManager([
-                new RS256(),
+            $merchantID = $helper->getMerchantId();
+            $privateKID = $helper->getPrivateKey();
+            $metadata = json_encode([
+                "mid" => $merchantID,
+                "kid" => $privateKID
             ]);
-
-            $jwsBuilder = new JWSBuilder(
-                $algorithmManager
-            );
-
-            $jwsKey = JWKFactory::createFromKeyFile(
-                $privateKeyPath,
-                null,
-                [
-                    'kid' => $privateKID,
-                    'use' => 'sig'
-
-                ]
-            );
-
-            $jwsHeader = [
-                'issued-by' => $merchantID,
-                'is-digested' => 'true',
-                'alg' => 'RS256',
-                'x-gl-enc' => 'true',
-                'x-gl-merchantId' => $merchantID,
-                'kid' => $privateKID
-            ];
-
-            $hashedPayload = base64_encode(hash('sha256', $jweToken, $BinaryOutputMode = true));
-
-
-            $jwsPayload = json_encode([
-                'digest' => $hashedPayload,
-                'digestAlgorithm' => "SHA-256",
-                'exp' => 300000,
-                'iat' => (string)round(microtime(true) * 1000)
-            ]);
-
-            try {
-                $jws = $jwsBuilder
-                    ->create()
-                    ->withPayload($jwsPayload)
-                    ->addSignature($jwsKey, $jwsHeader)
-                    ->build();
-            } catch (\Exception $e) {
-                throw new Exception($e->getMessage());
-            }
-
-            $jwsSerializer = new SignCompactSerializer();
-            $jwsToken = $jwsSerializer->serialize($jws,
-                0);
-
             $curl = curl_init();
-
             curl_setopt_array($curl, array(
                 CURLOPT_URL => $helper->getPayGlocalCheckoutUrl() . "/initiate/paycollect",
                 CURLOPT_RETURNTRANSFER => true,
@@ -163,13 +119,13 @@ class Meetanshi_PayGlocal_PaymentController extends Mage_Core_Controller_Front_A
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
                 CURLOPT_CUSTOMREQUEST => 'POST',
-                CURLOPT_POSTFIELDS => $jweToken,
+                CURLOPT_POSTFIELDS => $payload,
                 CURLOPT_HTTPHEADER => array(
-                    'x-gl-token-external: ' . $jwsToken,
+                    'x-gl-sign-external: ' . $sign,
+                    'x-gl-authn-metadata: ' . $metadata,
                     'Content-Type: text/plain'
                 ),
             ));
-
             $response = curl_exec($curl);
 
             $data = json_decode($response, true);
@@ -207,6 +163,9 @@ class Meetanshi_PayGlocal_PaymentController extends Mage_Core_Controller_Front_A
 
             $this->_redirect('checkout/cart');
         } catch (Exception $e) {
+
+            echo $e->getMessage();
+
             Mage::getSingleton('core/session')->addError($e->getMessage());
 
             if (Mage::getSingleton('checkout/session')->getLastRealOrderId()) {
@@ -220,126 +179,131 @@ class Meetanshi_PayGlocal_PaymentController extends Mage_Core_Controller_Front_A
 
     public function acceptAction()
     {
+        Mage::log('aceept call');
         try {
-            $helper = Mage::helper('payglocal');
             $params = $this->getRequest()->getParams();
 
             if (is_array($params) && !empty($params) && isset($params['x-gl-token'])) {
                 $token = $params['x-gl-token'];
-                $algorithmManager = new AlgorithmManager([
-                    new RS256(),
+                $data = explode('.', $token);
+                $payload = base64_decode($data[1]);
+                $response = json_decode($payload, true);
+
+                $helper = Mage::helper('payglocal');
+                $fp = fopen(Mage::getBaseDir('media') . '/payglocal/' . $helper->getPrivatePem(), "r");
+                $priv_key = fread($fp, 8192);
+                fclose($fp);
+                $privateKey = openssl_get_privatekey($priv_key);
+                $difPayload = '/gl/v1/payments/' . $response['merchantUniqueId'] . '/status';
+
+                openssl_sign($difPayload, $signature, $privateKey, OPENSSL_ALGO_SHA256);
+
+                $sign = base64_encode($signature);
+
+                $merchantID = $helper->getMerchantId();
+                $privateKID = $helper->getPrivateKey();
+                $metadata = json_encode([
+                    "mid" => $merchantID,
+                    "kid" => $privateKID
                 ]);
 
-                $jwsVerifier = new JWSVerifier(
-                    $algorithmManager
-                );
+                Mage::log($response);
 
-                $publicKeyPath = Mage::getBaseDir('media') . '/payglocal/' . $helper->getPublicPem();
-                $publicKID = $helper->getPublicKey();
-                $jwk = JWKFactory::createFromKeyFile(
-                    $publicKeyPath,
-                    null,
-                    [
-                        'kid' => $publicKID,
-                        'use' => 'sig'
-                    ]
-                );
-                $serializerManager = new JWSSerializerManager([
-                    new SignCompactSerializer(),
-                ]);
+                $curl = curl_init();
+                $url = $helper->getPayGlocalCheckoutUrl() . "/" . $response['merchantUniqueId'] . '/status';
+                curl_setopt_array($curl, array(
+                    CURLOPT_URL => $url,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_ENCODING => '',
+                    CURLOPT_MAXREDIRS => 10,
+                    CURLOPT_TIMEOUT => 0,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                    CURLOPT_HTTPHEADER => array(
+                        'x-gl-sign-external: ' . $sign,
+                        'x-gl-authn-metadata: ' . $metadata,
+                        'Content-Type: text/plain'
+                    ),
+                ));
+                $statusResponse = curl_exec($curl);
+                $statusData = json_decode($statusResponse, true);
+                curl_close($curl);
 
-                $jws = $serializerManager->unserialize($token);
-                $isVerified = $jwsVerifier->verifyWithKey($jws, $jwk, 0);
+                $orderId = explode("_", $response['merchantUniqueId']);
+                $order = Mage::getModel('sales/order')->loadByIncrementId($orderId['0']);
 
-                if ($isVerified) {
-                    $headerCheckerManager = $payload = null;
 
-                    try {
-                        $jwsLoader = new JWSLoader(
-                            $serializerManager,
-                            $jwsVerifier,
-                            $headerCheckerManager
-                        );
-                    } catch (\Exception $e) {
-                        Mage::getSingleton('core/session')->addError($e->getMessage());
-                        if (Mage::getSingleton('checkout/session')->getLastRealOrderId()) {
-                            if ($lastQuoteId = Mage::getSingleton('checkout/session')->getLastQuoteId()) {
-                                $quote = Mage::getModel('sales/quote')->load($lastQuoteId);
-                                $quote->setIsActive(true)->save();
-                            }
-                        }
-                        return $this->_redirect('checkout/cart');
+                Mage::log($statusData);
+
+                if (isset($statusData['status']) && $statusData['status'] == 'SENT_FOR_CAPTURE') {
+
+                    $payment = $order->getPayment();
+                    $transactionID = $order->getIncrementId();
+                    $payment->setTransactionId($transactionID);
+                    $payment->setLastTransId($transactionID);
+                    $payment->setAdditionalInformation('transId', $transactionID);
+                    if (array_key_exists('gid', $response)) {
+                        $payment->setAdditionalInformation('gid', $response['gid']);
+                    }
+                    if (array_key_exists('status', $response)) {
+                        $payment->setAdditionalInformation('status', $response['status']);
+                    }
+                    if (array_key_exists('statusUrl', $response)) {
+                        $payment->setAdditionalInformation('statusUrl', $response['statusUrl']);
                     }
 
-                    $jws = $jwsLoader->loadAndVerifyWithKey($token, $jwk, $signature, $payload);
+                    $payment->setAdditionalInformation((array)$payment->getAdditionalInformation());
+                    $payment->setParentTransactionId(null);
+                    $payment->save();
 
-                    $payload = json_decode($jws->getPayload(), true);
-
-                    if (array_key_exists('merchantUniqueId', $payload)) {
-                        $orderId = explode("_", $payload['merchantUniqueId']);
-                        $order = Mage::getModel('sales/order')->loadByIncrementId($orderId['0']);
-
-                        if (isset($payload['status']) && $payload['status'] == 'SENT_FOR_CAPTURE') {
-
-                            $payment = $order->getPayment();
-                            $transactionID = $order->getIncrementId();
-                            $payment->setTransactionId($transactionID);
-                            $payment->setLastTransId($transactionID);
-                            $payment->setAdditionalInformation('transId', $transactionID);
-                            if (array_key_exists('gid', $payload)) {
-                                $payment->setAdditionalInformation('gid', $payload['gid']);
-                            }
-                            if (array_key_exists('status', $payload)) {
-                                $payment->setAdditionalInformation('status', $payload['status']);
-                            }
-                            if (array_key_exists('statusUrl', $payload)) {
-                                $payment->setAdditionalInformation('statusUrl', $payload['statusUrl']);
-                            }
-
-                            $payment->setAdditionalInformation((array)$payment->getAdditionalInformation());
-                            $payment->setParentTransactionId(null);
-                            $payment->save();
-
-                            if ($order->canInvoice()) {
-                                $invoice = Mage::getModel('sales/service_order', $order)->prepareInvoice();
-                                $invoice->setRequestedCaptureCase(Mage_Sales_Model_Order_Invoice::CAPTURE_ONLINE);
-                                $invoice->register();
-                                $invoice->getOrder()->setIsInProcess(true);
-                                $transactionSave = Mage::getModel('core/resource_transaction')
-                                    ->addObject($invoice)
-                                    ->addObject($invoice->getOrder());
-                                $transactionSave->save();
-                            }
-
-                            $quote = Mage::getModel('sales/quote')
-                                ->load($order->getQuoteId());
-
-                            $quote->setIsActive(false)
-                                ->save();
-
-                            $session = $this->_getCheckoutSession();
-                            $session->clearHelperData();
-
-                            $session->setLastQuoteId($order->getQuoteId())->setLastSuccessQuoteId($order->getQuoteId());
-
-                            $orderId = $order->getId();
-                            $realOrderId = $order->getIncrementId();
-                            $session->setLastOrderId($orderId)->setLastRealOrderId($realOrderId);
-
-                            return $this->_redirect('checkout/onepage/success', array('_secure' => true));
-
-                        }
-                    } else {
-                        Mage::getSingleton('core/session')->addError("There is a processing error with your transaction with status. " . $payload["status"]);
-                        if (Mage::getSingleton('checkout/session')->getLastRealOrderId()) {
-                            if ($lastQuoteId = Mage::getSingleton('checkout/session')->getLastQuoteId()) {
-                                $quote = Mage::getModel('sales/quote')->load($lastQuoteId);
-                                $quote->setIsActive(true)->save();
-                            }
-                        }
-                        return $this->_redirect('checkout/cart');
+                    if ($order->canInvoice()) {
+                        $invoice = Mage::getModel('sales/service_order', $order)->prepareInvoice();
+                        $invoice->setRequestedCaptureCase(Mage_Sales_Model_Order_Invoice::CAPTURE_OFFLINE);
+                        $invoice->register();
+                        $invoice->getOrder()->setIsInProcess(true);
+                        $transactionSave = Mage::getModel('core/resource_transaction')
+                            ->addObject($invoice)
+                            ->addObject($invoice->getOrder());
+                        $transactionSave->save();
                     }
+
+                    $order->setState(Mage_Sales_Model_Order::STATE_PROCESSING, true, 'Transaction approved.', true);
+
+                    $order->sendNewOrderEmail();
+                    $order->setEmailSent(true);
+
+                    $order->save();
+
+                    $quote = Mage::getModel('sales/quote')
+                        ->load($order->getQuoteId());
+
+                    $quote->setIsActive(false)
+                        ->save();
+
+                    $session = $this->_getCheckoutSession();
+                    $session->clearHelperData();
+
+                    $session->setLastQuoteId($order->getQuoteId())->setLastSuccessQuoteId($order->getQuoteId());
+
+                    $orderId = $order->getId();
+                    $realOrderId = $order->getIncrementId();
+                    $session->setLastOrderId($orderId)->setLastRealOrderId($realOrderId);
+
+                    return $this->_redirect('checkout/onepage/success', array('_secure' => true));
+                } else {
+                    Mage::getSingleton('core/session')->addError("There is a processing error with your transaction with status. " . $response["status"]);
+                    $order->cancel()->setState(Mage_Sales_Model_Order::STATE_CANCELED, true, 'Transaction is not approved.', true);
+                    $order->setStatus('canceled');
+                    $order->save();
+                    if (Mage::getSingleton('checkout/session')->getLastRealOrderId()) {
+                        if ($lastQuoteId = Mage::getSingleton('checkout/session')->getLastQuoteId()) {
+                            $quote = Mage::getModel('sales/quote')->load($lastQuoteId);
+                            $quote->setIsActive(true)->save();
+                        }
+                    }
+                    return $this->_redirect('checkout/cart');
                 }
+
             }
         } catch (Exception $e) {
             Mage::getSingleton('core/session')->addError($e->getMessage());
